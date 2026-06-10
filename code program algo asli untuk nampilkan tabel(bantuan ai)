@@ -1,0 +1,196 @@
+import os
+import cv2
+import numpy as np
+import matplotlib.pyplot as plt
+from google.colab import drive
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
+
+
+drive.mount('/content/drive')
+
+FOLDER_TOMAT = '/content/drive/MyDrive/project kdka/train new new/INI DIA'
+print("✔ Cell 1: Seluruh pustaka berhasil dimuat.")
+
+
+  def bersihkan_background_library(img_hsv):
+    """
+    Membuat masker biner menggunakan fungsi bawaan OpenCV (cv2.inRange)
+    untuk mengisolasi warna tomat (Merah, Oranye, Kuning, Hijau).
+    """
+    lower_red1, upper_red1 = np.array([0, 100, 50]), np.array([10, 255, 255])
+    lower_red2, upper_red2 = np.array([160, 100, 50]), np.array([179, 255, 255])
+
+
+    lower_green_yellow, upper_green_yellow = np.array([11, 50, 50]), np.array([85, 255, 255])
+
+
+    mask_r1 = cv2.inRange(img_hsv, lower_red1, upper_red1)
+    mask_r2 = cv2.inRange(img_hsv, lower_red2, upper_red2)
+    mask_g = cv2.inRange(img_hsv, lower_green_yellow, upper_green_yellow)
+
+
+    mask_tomat = cv2.bitwise_or(mask_r1, mask_r2)
+    mask_tomat = cv2.bitwise_or(mask_tomat, mask_g)
+
+    return mask_tomat
+
+def ekstrak_fitur_dataset(image_folder, target_size=(100, 100)):
+    """
+    Membaca seluruh direktori gambar, menerapkan prapemrosesan citra,
+    dan mengembalikan matriks fitur berdimensi [Jumlah_Gambar, 2].
+    """
+    features_list = []
+    image_names = []
+
+    if not os.path.exists(image_folder):
+        print(f"Error: Folder '{image_folder}' tidak ditemukan.")
+        return np.array([]), []
+
+    valid_extensions = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff')
+    file_list = [f for f in os.listdir(image_folder) if f.lower().endswith(valid_extensions)]
+
+    for filename in file_list:
+        img_bgr = cv2.imread(os.path.join(image_folder, filename))
+        if img_bgr is None:
+            continue
+
+    
+        img_resized = cv2.resize(img_bgr, target_size)
+        img_blur = cv2.GaussianBlur(img_resized, (5, 5), 0)
+        img_hsv = cv2.cvtColor(img_blur, cv2.COLOR_BGR2HSV)
+
+      
+        mask = bersihkan_background_library(img_hsv)
+
+        piksel_h = img_hsv[:, :, 0][mask > 0]
+        piksel_s = img_hsv[:, :, 1][mask > 0]
+
+      
+        mean_h = np.mean(piksel_h) if len(piksel_h) > 0 else np.mean(img_hsv[:, :, 0])
+        mean_s = np.mean(piksel_s) if len(piksel_s) > 0 else np.mean(img_hsv[:, :, 1])
+
+        features_list.append([mean_h, mean_s])
+        image_names.append(filename)
+
+    return np.array(features_list), image_names
+
+
+print("Memulai pemrosesan citra dan ekstraksi fitur...")
+fitur_mentah, daftar_nama_file = ekstrak_fitur_dataset(FOLDER_TOMAT)
+print(f"✔ Cell 2 Selesai! Berhasil mengolah {len(daftar_nama_file)} gambar.")
+
+
+
+scaler = MinMaxScaler(feature_range=(0, 1))
+fitur_terstandar = scaler.fit_transform(fitur_mentah)
+
+def analisis_jumlah_klaster(data, k_min=2, k_max=10):
+    """
+    Menghitung visualisasi Elbow (Inertia) dan Silhouette Score
+    menggunakan pustaka evaluasi eksternal dari Scikit-Learn.
+    """
+    list_inertia = []
+    list_silhouette = []
+    range_k = range(k_min, k_max + 1)
+
+    for k in range_k:
+
+        model_km = KMeans(n_clusters=k, tol=1e-4, max_iter=300, random_state=42, n_init=10)
+        model_km.fit(data)
+
+        list_inertia.append(model_km.inertia_)
+        list_silhouette.append(silhouette_score(data, model_km.labels_))
+
+
+    plt.figure(figsize=(12, 4))
+    plt.subplot(1, 2, 1)
+    plt.plot(range_k, list_inertia, marker='o', color='b')
+    plt.title('Metode Elbow (Inertia)'); plt.xlabel('Nilai K'); plt.ylabel('Inertia'); plt.grid(True)
+
+    plt.subplot(1, 2, 2)
+    plt.plot(range_k, list_silhouette, marker='s', color='g')
+    plt.title('Silhouette Score Standard'); plt.xlabel('Nilai K'); plt.ylabel('Skor'); plt.grid(True)
+    plt.tight_layout(); plt.show()
+
+
+analisis_jumlah_klaster(fitur_terstandar)
+
+
+
+K_TERBAIK = 5
+kmeans_final = KMeans(n_clusters=K_TERBAIK, tol=1e-4, random_state=42, n_init=10)
+kmeans_final.fit(fitur_terstandar) 
+
+labels_hasil = kmeans_final.labels_
+centroids_scaled = kmeans_final.cluster_centers_
+
+
+centroids_asli = scaler.inverse_transform(centroids_scaled)
+
+
+idx_urut = np.argsort(centroids_scaled[:, 0])
+
+
+cmap_visual = plt.cm.get_cmap('jet', K_TERBAIK)
+
+
+plt.figure(figsize=(7, 5))
+for k in range(K_TERBAIK):
+    plt.scatter(
+        fitur_terstandar[labels_hasil == k, 0],
+        fitur_terstandar[labels_hasil == k, 1],
+        s=35, color=cmap_visual(k), alpha=0.6, edgecolors='w', label=f'Klaster {k}'
+    )
+plt.scatter(
+    centroids_scaled[:, 0], centroids_scaled[:, 1],
+    s=200, c='black', marker='X', edgecolors='white', linewidth=1.5, label='Centroid'
+)
+plt.title(f'Hasil Akhir Klastering Gambar Tomat (K={K_TERBAIK})', fontweight='bold')
+plt.xlabel('Mean Hue (Normalized)'); plt.ylabel('Mean Saturation (Normalized)')
+plt.grid(True, linestyle='--', alpha=0.5); plt.legend(loc='upper right'); plt.show()
+
+print("\n" + "="*60 + "\n                 DETAIL CENTROID PER KLASTER\n" + "="*60)
+for k in range(K_TERBAIK):
+   
+    posisi_kematangan = np.where(idx_urut == k)[0][0]
+
+    print(f"▶ [Klaster {k}] -> Tingkat Kematangan Ke-{posisi_kematangan + 1} (Urutan Hue)")
+    print(f"  * Koordinat Terstandar (0-1) : Hue = {centroids_scaled[k,0]:.4f}, Saturation = {centroids_scaled[k,1]:.4f}")
+    print(f"  * Koordinat Fisik Citra Asli : Hue = {centroids_asli[k,0]:.2f}, Saturation = {centroids_asli[k,1]:.2f}")
+    print("-" * 60)
+
+
+def validasi_gambar_tomat_baru(img_path, model_kmeans, data_scaler):
+
+    img_bgr = cv2.imread(img_path)
+    if img_bgr is None:
+        print(f"Error: Berkas citra pada '{img_path}' tidak dapat diakses."); return
+
+    img_resized = cv2.resize(img_bgr, (100, 100))
+    img_hsv = cv2.cvtColor(cv2.GaussianBlur(img_resized, (5, 5), 0), cv2.COLOR_BGR2HSV)
+
+
+    mask = bersihkan_background_library(img_hsv)
+    piksel_h = img_hsv[:, :, 0][mask > 0]
+    piksel_s = img_hsv[:, :, 1][mask > 0]
+
+    mean_h = np.mean(piksel_h) if len(piksel_h) > 0 else np.mean(img_hsv[:, :, 0])
+    mean_s = np.mean(piksel_s) if len(piksel_s) > 0 else np.mean(img_hsv[:, :, 1])
+
+
+    fitur_baru_scaled = data_scaler.transform(np.array([[mean_h, mean_s]]))
+
+
+    prediksi_klaster = model_kmeans.predict(fitur_baru_scaled)[0]
+
+    print("=" * 60)
+    print(f" HASIL INFERENSI KLASTERING: {os.path.basename(img_path)}")
+    print("=" * 60)
+    print(f"Ekstraksi Riil  -> Hue: {mean_h:.2f}, Saturation: {mean_s:.2f}")
+    print(f"Status Kategori -> Gambar Terpilih Masuk ke: {label_interpretasi[prediksi_klaster]}")
+
+)
+PATH_GAMBAR_TES = '/content/drive/MyDrive/project kdka/tes/images (4).jpg'
+validasi_gambar_tomat_baru(PATH_GAMBAR_TES, kmeans_final, scaler)
